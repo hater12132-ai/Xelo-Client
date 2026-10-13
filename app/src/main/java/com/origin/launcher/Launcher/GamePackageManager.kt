@@ -9,11 +9,7 @@ import android.util.Log
 import com.origin.launcher.versions.GameVersion
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
-import java.io.IOException
 import java.util.zip.ZipFile
-import android.annotation.SuppressLint
-
 
 class GamePackageManager private constructor(private val context: Context, private val version: GameVersion?) {
 
@@ -21,6 +17,7 @@ class GamePackageManager private constructor(private val context: Context, priva
     private val assetManager: AssetManager
     private val nativeLibDir: String
     private val applicationInfo: ApplicationInfo
+    // Note: packageContext/applicationInfo assigned in init for isolated vs installed paths
 
     private val knownPackages = arrayOf(
         "com.mojang.minecraftpe",
@@ -32,28 +29,31 @@ class GamePackageManager private constructor(private val context: Context, priva
         "libc++_shared.so",
         "libfmod.so",
         "libMediaDecoders_Android.so",
-        "libHttpClient.Android.so",
-        "libminecraftpe.so",
+        "libmaesdk.so",
+        "libminecraftpe.so"
     )
 
     private val systemLoadedLibs = arrayOf(
         "libpairipcore.so",
-        "libPlayFabMultiplayer.so",
-        "libmaesdk.so",
-        "libmtbinloader2.so",
+        "libxelo.so",
+        "libmtbinloader2.so"
     )
 
     init {
-        val packageName = detectGamePackage() ?: throw IllegalStateException("Minecraft not found")
-        packageContext = context.createPackageContext(
-            packageName,
-            Context.CONTEXT_IGNORE_SECURITY or Context.CONTEXT_INCLUDE_CODE
-        )
-
+        // Isolated imported APK (Levi-style): do NOT require Play Store Minecraft installed
         if (version != null && !version.isInstalled) {
             applicationInfo = MinecraftLauncher(context).createFakeApplicationInfo(version, MinecraftLauncher.MC_PACKAGE_NAME)
             nativeLibDir = applicationInfo.nativeLibraryDir
+            // Use host app context as package context; assets/libs come from the imported APK
+            packageContext = context
+            Log.i(TAG, "Isolated version mode: ${version.versionCode} dir=${version.versionDir}")
         } else {
+            val packageName = detectGamePackage()
+                ?: throw IllegalStateException("Minecraft not found — install MCPE or import an APK version")
+            packageContext = context.createPackageContext(
+                packageName,
+                Context.CONTEXT_IGNORE_SECURITY or Context.CONTEXT_INCLUDE_CODE
+            )
             applicationInfo = packageContext.applicationInfo
             nativeLibDir = resolveNativeLibDir()
         }
@@ -88,11 +88,8 @@ class GamePackageManager private constructor(private val context: Context, priva
     }
 
     private fun getDeviceAbi(): String {
-        return Build.SUPPORTED_64_BIT_ABIS.firstOrNull {
-            it.contains("arm64-v8a") || it.contains("x86_64")
-        } ?: Build.SUPPORTED_32_BIT_ABIS.firstOrNull {
-            it.contains("armeabi-v7a") || it.contains("x86")
-        } ?: (Build.SUPPORTED_ABIS.firstOrNull() ?: "armeabi-v7a")
+        // arm64-only client (1.26.52.3 target)
+        return "arm64-v8a"
     }
 
     private fun extractLibraries() {
@@ -119,7 +116,7 @@ class GamePackageManager private constructor(private val context: Context, priva
             apkPaths.forEach { extractFromApk(it, outputDir, getDeviceAbi()) }
             if (requiredLibs.any { !File(outputDir, it).exists() }) {
                 Log.w(TAG, "Primary ABI ${getDeviceAbi()} libraries missing, trying fallback ABIs")
-                val fallbackAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+                val fallbackAbis = listOf("arm64-v8a") // arm64-only client
                 fallbackAbis.filter { it != getDeviceAbi() }.forEach { abi ->
                     apkPaths.forEach { extractFromApk(it, outputDir, abi) }
                 }
