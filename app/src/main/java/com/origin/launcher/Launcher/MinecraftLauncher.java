@@ -12,6 +12,7 @@ import com.origin.launcher.versions.GameVersion;
 import com.origin.launcher.utils.FeatureSettings;
 import com.origin.launcher.dialogs.LoadingDialog;
 import android.util.Log;
+import com.origin.launcher.LaunchLog;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -93,6 +94,7 @@ public class MinecraftLauncher {
             }).start();
         } catch (Exception e) {
             Log.e(TAG, "Launch failed: " + e.getMessage(), e);
+            try { LaunchLog.INSTANCE.e("Launch failed", e); } catch (Throwable ignored) {}
             dismissLoading();
             showLaunchErrorOnUi("Launch failed: " + e.getMessage());
         }

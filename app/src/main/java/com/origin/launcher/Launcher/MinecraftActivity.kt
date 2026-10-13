@@ -12,6 +12,7 @@ import com.origin.launcher.Launcher.inbuilt.overlay.InbuiltOverlayManager
 import com.origin.launcher.versions.GameVersion
 import com.origin.launcher.utils.FeatureSettings
 import java.io.File
+import com.origin.launcher.LaunchLog
 
 class MinecraftActivity : MainActivity() {
 
@@ -19,12 +20,15 @@ class MinecraftActivity : MainActivity() {
     private var overlayManager: InbuiltOverlayManager? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        LaunchLog.init(applicationContext)
+        LaunchLog.w("MinecraftActivity.onCreate begin")
         try {
             val versionDir = intent.getStringExtra("MC_PATH")
             val versionCode = intent.getStringExtra("MINECRAFT_VERSION") ?: ""
             val versionDirName = intent.getStringExtra("MINECRAFT_VERSION_DIR") ?: ""
             val isInstalled = intent.getBooleanExtra("IS_INSTALLED", false)
             val isIsolated = FeatureSettings.getInstance().isVersionIsolationEnabled()
+            LaunchLog.w("MC_PATH=$versionDir version=$versionCode dirName=$versionDirName installed=$isInstalled isolated=$isIsolated")
 
             val version = if (isIsolated && !versionDir.isNullOrEmpty()) {
                 GameVersion(
@@ -53,21 +57,36 @@ class MinecraftActivity : MainActivity() {
             gameManager = GamePackageManager.getInstance(applicationContext, version)
 
             try {
+                LaunchLog.w("loading preloader")
                 System.loadLibrary("preloader")
+                LaunchLog.w("preloader OK")
             } catch (e: Exception) {
+                LaunchLog.e("Failed to load preloader", e)
                 Log.w(TAG, "Failed to load preloader: ${e.message}")
             }
 
+            LaunchLog.w("loading minecraftpe")
             if (!gameManager.loadLibrary("minecraftpe")) {
+                LaunchLog.e("Failed to load libminecraftpe.so")
                 throw RuntimeException("Failed to load libminecraftpe.so")
             }
+            LaunchLog.w("minecraftpe OK — calling super.onCreate")
         } catch (e: Exception) {
+            LaunchLog.e("MinecraftActivity load failed", e)
             Toast.makeText(this, "Failed to load game: ${e.message}", Toast.LENGTH_LONG).show()
             finish()
             return
         }
-        super.onCreate(savedInstanceState)
-        MinecraftActivityState.onCreated(this)
+        try {
+            super.onCreate(savedInstanceState)
+            LaunchLog.w("super.onCreate OK")
+            MinecraftActivityState.onCreated(this)
+            LaunchLog.w("MinecraftActivity fully created")
+        } catch (e: Exception) {
+            LaunchLog.e("super.onCreate / post-init failed", e)
+            Toast.makeText(this, "Game init failed: ${e.message}", Toast.LENGTH_LONG).show()
+            finish()
+        }
     }
 
     private fun startInbuiltModServices() {

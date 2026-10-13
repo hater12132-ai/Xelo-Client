@@ -10,6 +10,7 @@ import com.origin.launcher.versions.GameVersion
 import java.io.File
 import java.io.FileOutputStream
 import java.util.zip.ZipFile
+import com.origin.launcher.LaunchLog
 
 class GamePackageManager private constructor(private val context: Context, private val version: GameVersion?) {
 
@@ -281,13 +282,16 @@ class GamePackageManager private constructor(private val context: Context, priva
                 if (libFile.exists() && libFile.length() > 0) {
                     System.load(libFile.absolutePath)
                     Log.d(TAG, "Loaded $name from $nativeLibDir")
+                    LaunchLog.w("Loaded $name from $nativeLibDir")
                     true
                 } else {
                     Log.w(TAG, "Library $name not found in $nativeLibDir, skipping")
+                    LaunchLog.w("Library $name NOT FOUND in $nativeLibDir")
                     false
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load $name: ${e.message}")
+                LaunchLog.e("Failed to load $name", e)
                 false
             }
         }
