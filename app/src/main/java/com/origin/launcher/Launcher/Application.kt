@@ -39,7 +39,7 @@ class LauncherApplication : Application() {
 
         XCrash.init(this, XCrash.InitParameters().apply {
             setAppVersion(BuildConfig.VERSION_NAME)
-            setLogDir(File( Environment.getExternalStorageDirectory(), "games/xelo_client/crash_logs").absolutePath)
+            setLogDir(File(Environment.getExternalStorageDirectory(), "games/xelo_client/crash_logs").absolutePath)
             setNativeCallback(callback)
             setJavaCallback(callback)
             setAnrCallback(callback)
@@ -48,15 +48,9 @@ class LauncherApplication : Application() {
             setAnrRethrow(false)
         })
 
-        try {
-            System.loadLibrary("xelo_init")
-            val modsDir = File(cacheDir, "mods")
-            if (!modsDir.exists()) modsDir.mkdirs()
-            Log.d("LauncherApplication", "Mods path: ${modsDir.absolutePath}")
-            nativeSetupRuntime(modsDir.absolutePath)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        // Do NOT load xelo_init here — it pulls NDK libc++_shared and breaks
+        // libminecraftpe.so on 1.26.x (__cxa_init_primary_exception).
+        // nativeSetupRuntime is called from MinecraftLauncher AFTER MC libs load.
     }
 
     external fun nativeSetupRuntime(modsPath: String)
@@ -69,5 +63,30 @@ class LauncherApplication : Application() {
         @JvmStatic
         lateinit var preferences: SharedPreferences
             private set
+
+        @Volatile
+        private var nativeReady = false
+
+        /**
+         * Load xelo_init + setup runtime AFTER Minecraft's libc++_shared / libminecraftpe.
+         */
+        @JvmStatic
+        fun ensureNativeRuntime(appContext: Context) {
+            if (nativeReady) return
+            synchronized(this) {
+                if (nativeReady) return
+                try {
+                    System.loadLibrary("xelo_init")
+                    val modsDir = File(appContext.cacheDir, "mods")
+                    if (!modsDir.exists()) modsDir.mkdirs()
+                    (appContext.applicationContext as LauncherApplication)
+                        .nativeSetupRuntime(modsDir.absolutePath)
+                    nativeReady = true
+                    Log.d("LauncherApplication", "xelo_init ready, mods=${modsDir.absolutePath}")
+                } catch (e: Exception) {
+                    Log.e("LauncherApplication", "ensureNativeRuntime failed: ${e.message}", e)
+                }
+            }
+        }
     }
 }

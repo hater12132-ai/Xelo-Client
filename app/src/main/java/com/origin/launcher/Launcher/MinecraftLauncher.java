@@ -149,6 +149,13 @@ public class MinecraftLauncher {
                     throw new RuntimeException("Failed to load libminecraftpe.so");
                 }
                 LaunchLog.INSTANCE.w("minecraftpe loaded — starting activity");
+                // Now safe to pull in Xelo native (uses NDK c++ AFTER MC's symbols are bound)
+                try {
+                    LauncherApplication.ensureNativeRuntime(context.getApplicationContext());
+                    LaunchLog.INSTANCE.w("xelo_init runtime OK");
+                } catch (Throwable t) {
+                    LaunchLog.INSTANCE.e("xelo_init runtime failed", t);
+                }
                 gameManager.loadLibrary("xelo");
                 gameManager.loadLibrary("mtbinloader2");
 

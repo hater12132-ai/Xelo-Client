@@ -79,13 +79,19 @@ class GamePackageManager private constructor(private val context: Context, priva
 
     private fun resolveNativeLibDir(): String {
         val appInfo = packageContext.applicationInfo
-        return if (appInfo.splitPublicSourceDirs?.isNotEmpty() == true) {
-            val cacheLibDir = File(context.cacheDir, "lib/${getDeviceAbi()}")
-            cacheLibDir.mkdirs()
-            cacheLibDir.absolutePath
-        } else {
-            appInfo.nativeLibraryDir
+        // Prefer the system-extracted package lib dir — same place the Play Store app loads from.
+        // Cache copies of libc++_shared often miss symbols MC 1.26 needs (__cxa_init_primary_exception).
+        val systemDir = File(appInfo.nativeLibraryDir ?: "")
+        val pe = File(systemDir, "libminecraftpe.so")
+        val cxx = File(systemDir, "libc++_shared.so")
+        if (pe.exists() && pe.length() > 1_000_000L) {
+            LaunchLog.w("Using package nativeLibraryDir=${systemDir.absolutePath} pe=${pe.length()} cxx=${cxx.length()}")
+            return systemDir.absolutePath
         }
+        val cacheLibDir = File(context.cacheDir, "lib/${getDeviceAbi()}")
+        cacheLibDir.mkdirs()
+        LaunchLog.w("Package nativeLibraryDir missing minecraftpe — using cache ${cacheLibDir.absolutePath}")
+        return cacheLibDir.absolutePath
     }
 
     private fun getDeviceAbi(): String {
@@ -124,15 +130,30 @@ class GamePackageManager private constructor(private val context: Context, priva
             }
         } else {
             val appInfo = packageContext.applicationInfo
-            if (File(appInfo.nativeLibraryDir).exists()) {
-                copyFromNativeDir(appInfo.nativeLibraryDir, outputDir)
+            val systemDir = File(appInfo.nativeLibraryDir ?: "")
+            // If we're already pointing at the real package lib dir, do not re-copy/extract
+            if (outputDir.absolutePath == systemDir.absolutePath &&
+                File(outputDir, "libminecraftpe.so").exists()) {
+                LaunchLog.w("extractLibraries: already using package dir, skip copy")
+                verifyLibraries(outputDir)
+                return
+            }
+            // Fresh cache extract — delete stale c++_shared that may lack 1.26 symbols
+            if (outputDir.exists() && outputDir.absolutePath.contains("/cache/lib/")) {
+                outputDir.listFiles()?.forEach { it.delete() }
+                LaunchLog.w("Cleared stale cache libs in ${outputDir.absolutePath}")
+            }
+            if (systemDir.exists()) {
+                copyFromNativeDir(systemDir.absolutePath, outputDir)
             }
             val apkPaths = mutableListOf<String>()
             appInfo.sourceDir?.let { apkPaths.add(it) }
             appInfo.splitPublicSourceDirs?.let { apkPaths.addAll(it) }
-            apkPaths.forEach { extractFromApk(it, outputDir, getDeviceAbi()) }
+            appInfo.splitSourceDirs?.forEach { apkPaths.add(it) }
+            apkPaths.distinct().forEach { extractFromApk(it, outputDir, getDeviceAbi()) }
         }
         verifyLibraries(outputDir)
+        LaunchLog.w("extract done: cxx=${File(outputDir,"libc++_shared.so").length()} pe=${File(outputDir,"libminecraftpe.so").length()}")
     }
 
     private fun copyFromNativeDir(sourceDir: String, destDir: File) {
