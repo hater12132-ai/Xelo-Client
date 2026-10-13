@@ -130,38 +130,34 @@ public class MinecraftLauncher {
                 sourceIntent.putExtra("MODS_ENABLED", modsEnabled);
                 sourceIntent.putExtra("MINECRAFT_VERSION", version.versionCode);
                 sourceIntent.putExtra("MINECRAFT_VERSION_DIR", version.directoryName);
+                // Safe load order for 1.26.x (ARM64). Never preload maesdk/pairip — they SIGSEGV.
+                LaunchLog.INSTANCE.init(context.getApplicationContext());
+                LaunchLog.INSTANCE.w("launchMinecraftActivity version=" + version.versionCode
+                        + " installed=" + version.isInstalled
+                        + " dir=" + version.versionDir);
+
+                gameManager.loadLibrary("c++_shared");
+                // HttpClient optional
                 if (shouldLoadHttpClient(version)) {
-                    gameManager.loadLibrary("c++_shared");
-                    if (gameManager.loadLibrary("HttpClient.Android")) {
-                        Log.d(TAG, "Loaded Minecraft's libHttpClient.Android.so");
-                    } else {
-                        Log.w(TAG, "HttpClient.Android not found in extracted libs");
+                    if (!gameManager.loadLibrary("HttpClient.Android")) {
+                        LaunchLog.INSTANCE.w("HttpClient.Android missing — continuing");
                     }
                 }
-
-                if (shouldLoadMaesdk(version)) {
-                    java.util.Set<String> excludeLibs = new java.util.HashSet<>();
-                    if (shouldLoadHttpClient(version)) {
-                        excludeLibs.add("c++_shared");
-                        excludeLibs.add("HttpClient.Android");
-                    }
-if (!shouldLoadPlayFab(version)) {
-                        excludeLibs.add("PlayFabMultiplayer");
-                    }
-                    gameManager.loadAllLibraries(excludeLibs);
-                } else {
-                    if (!shouldLoadHttpClient(version)) {
-                        gameManager.loadLibrary("c++_shared");
-                    }
-                    gameManager.loadLibrary("fmod");
-                    gameManager.loadLibrary("MediaDecoders_Android");
-                    gameManager.loadLibrary("minecraftpe");
-                    gameManager.loadLibrary("mtbinloader2");
+                gameManager.loadLibrary("fmod");
+                gameManager.loadLibrary("MediaDecoders_Android");
+                // CRITICAL: minecraftpe before optional SDKs
+                if (!gameManager.loadLibrary("minecraftpe")) {
+                    throw new RuntimeException("Failed to load libminecraftpe.so");
                 }
+                LaunchLog.INSTANCE.w("minecraftpe loaded — starting activity");
+                // Our injectors
+                gameManager.loadLibrary("xelo");
+                gameManager.loadLibrary("mtbinloader2");
+                // Optional telemetry — never fatal; skip by default on 1.26+
+                // (uncomment if needed later)
+                // gameManager.loadLibrary("maesdk");
 
-                activity.runOnUiThread(() -> {
-                    dismissLoading();
-                    activity.startActivity(sourceIntent);
+                activity.startActivity(sourceIntent);
                 });
             } catch (Exception e) {
                 Log.e(TAG, "Failed to launch Minecraft activity: " + e.getMessage(), e);
