@@ -120,9 +120,9 @@ public class MinecraftLauncher {
                 }
 
                 sourceIntent.setClass(context, MinecraftActivity.class);
-                ApplicationInfo mcInfo = version.isInstalled ?
-                        gameManager.getPackageContext().getApplicationInfo() :
-                        createFakeApplicationInfo(version, MC_PACKAGE_NAME);
+                ApplicationInfo mcInfo = version.isInstalled
+                        ? gameManager.getPackageContext().getApplicationInfo()
+                        : createFakeApplicationInfo(version, MC_PACKAGE_NAME);
                 sourceIntent.putExtra("MC_SRC", mcInfo.sourceDir);
                 if (mcInfo.splitSourceDirs != null) {
                     sourceIntent.putExtra("MC_SPLIT_SRC", new ArrayList<>(Arrays.asList(mcInfo.splitSourceDirs)));
@@ -130,6 +130,7 @@ public class MinecraftLauncher {
                 sourceIntent.putExtra("MODS_ENABLED", modsEnabled);
                 sourceIntent.putExtra("MINECRAFT_VERSION", version.versionCode);
                 sourceIntent.putExtra("MINECRAFT_VERSION_DIR", version.directoryName);
+
                 // Safe load order for 1.26.x (ARM64). Never preload maesdk/pairip — they SIGSEGV.
                 LaunchLog.INSTANCE.init(context.getApplicationContext());
                 LaunchLog.INSTANCE.w("launchMinecraftActivity version=" + version.versionCode
@@ -137,7 +138,6 @@ public class MinecraftLauncher {
                         + " dir=" + version.versionDir);
 
                 gameManager.loadLibrary("c++_shared");
-                // HttpClient optional
                 if (shouldLoadHttpClient(version)) {
                     if (!gameManager.loadLibrary("HttpClient.Android")) {
                         LaunchLog.INSTANCE.w("HttpClient.Android missing — continuing");
@@ -145,22 +145,21 @@ public class MinecraftLauncher {
                 }
                 gameManager.loadLibrary("fmod");
                 gameManager.loadLibrary("MediaDecoders_Android");
-                // CRITICAL: minecraftpe before optional SDKs
                 if (!gameManager.loadLibrary("minecraftpe")) {
                     throw new RuntimeException("Failed to load libminecraftpe.so");
                 }
                 LaunchLog.INSTANCE.w("minecraftpe loaded — starting activity");
-                // Our injectors
                 gameManager.loadLibrary("xelo");
                 gameManager.loadLibrary("mtbinloader2");
-                // Optional telemetry — never fatal; skip by default on 1.26+
-                // (uncomment if needed later)
-                // gameManager.loadLibrary("maesdk");
 
                 activity.startActivity(sourceIntent);
-                });
+                activity.runOnUiThread(this::dismissLoading);
             } catch (Exception e) {
                 Log.e(TAG, "Failed to launch Minecraft activity: " + e.getMessage(), e);
+                try {
+                    LaunchLog.INSTANCE.e("Failed to launch Minecraft activity", e);
+                } catch (Throwable ignored) {
+                }
                 activity.runOnUiThread(() -> {
                     dismissLoading();
                     Toast.makeText(context, "Failed to launch: " + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -187,7 +186,7 @@ public class MinecraftLauncher {
         return isVersionAtLeast(versionCode, targetVersion);
     }
 
-private boolean shouldLoadPlayFab(GameVersion version) {
+    private boolean shouldLoadPlayFab(GameVersion version) {
         if (version == null || version.versionCode == null) {
             return false;
         }
