@@ -286,34 +286,52 @@ class GamePackageManager private constructor(private val context: Context, priva
         }
     }
 
+    // Libs shipped inside the Xelo APK (not Minecraft)
+    private val hostShippedLibs = setOf("xelo", "mtbinloader2", "xelo_init", "preloader")
+
     fun loadLibrary(name: String): Boolean {
         val plain = name.removePrefix("lib").removeSuffix(".so")
-        val libFile = File(nativeLibDir, "lib$plain.so")
-        val libName = libFile.name
-        LaunchLog.w("ABOUT TO LOAD $plain path=${libFile.absolutePath} exists=${libFile.exists()} size=${if (libFile.exists()) libFile.length() else 0}")
-        return if (systemLoadedLibs.contains(libName)) {
-            try {
-                System.loadLibrary(plain)
-                LaunchLog.w("Loaded system $plain OK")
-                true
-            } catch (e: Throwable) {
-                LaunchLog.e("Failed system $plain", e)
-                false
-            }
-        } else {
-            try {
-                if (libFile.exists() && libFile.length() > 0) {
-                    System.load(libFile.absolutePath)
-                    LaunchLog.w("Loaded $plain OK (${libFile.length()} bytes)")
-                    true
-                } else {
-                    LaunchLog.w("SKIP $plain — not found in $nativeLibDir")
-                    false
+        val mcFile = File(nativeLibDir, "lib$plain.so")
+        val hostLibDir = context.applicationInfo.nativeLibraryDir ?: ""
+        val hostFile = File(hostLibDir, "lib$plain.so")
+
+        // Host-shipped injectors: load from Xelo app lib dir, never from MC package dir
+        if (plain in hostShippedLibs) {
+            LaunchLog.w("ABOUT TO LOAD host $plain path=${hostFile.absolutePath} exists=${hostFile.exists()} size=${if (hostFile.exists()) hostFile.length() else 0}")
+            return try {
+                when {
+                    hostFile.exists() && hostFile.length() > 0 -> {
+                        System.load(hostFile.absolutePath)
+                        LaunchLog.w("Loaded host $plain OK (${hostFile.length()} bytes)")
+                        true
+                    }
+                    else -> {
+                        System.loadLibrary(plain)
+                        LaunchLog.w("Loaded host $plain via loadLibrary OK")
+                        true
+                    }
                 }
             } catch (e: Throwable) {
-                LaunchLog.e("Failed $plain", e)
+                LaunchLog.e("Failed host $plain", e)
                 false
             }
+        }
+
+        LaunchLog.w("ABOUT TO LOAD $plain path=${mcFile.absolutePath} exists=${mcFile.exists()} size=${if (mcFile.exists()) mcFile.length() else 0}")
+        return try {
+            if (mcFile.exists() && mcFile.length() > 0) {
+                System.load(mcFile.absolutePath)
+                LaunchLog.w("Loaded $plain OK (${mcFile.length()} bytes)")
+                true
+            } else {
+                // last resort: system loadLibrary (pairip etc.)
+                System.loadLibrary(plain)
+                LaunchLog.w("Loaded $plain via loadLibrary OK")
+                true
+            }
+        } catch (e: Throwable) {
+            LaunchLog.e("Failed $plain", e)
+            false
         }
     }
 

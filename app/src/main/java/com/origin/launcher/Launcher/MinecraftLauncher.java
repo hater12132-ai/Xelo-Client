@@ -156,9 +156,15 @@ public class MinecraftLauncher {
                 } catch (Throwable t) {
                     LaunchLog.INSTANCE.e("xelo_init runtime failed", t);
                 }
-                gameManager.loadLibrary("xelo");
-                gameManager.loadLibrary("mtbinloader2");
+                // Host injectors (optional for launch — game already has minecraftpe)
+                if (!gameManager.loadLibrary("xelo")) {
+                    LaunchLog.INSTANCE.w("libxelo.so missing — continuing without injector");
+                }
+                if (!gameManager.loadLibrary("mtbinloader2")) {
+                    LaunchLog.INSTANCE.w("libmtbinloader2.so missing — continuing without materialbinloader");
+                }
 
+                LaunchLog.INSTANCE.w("startActivity MinecraftActivity");
                 activity.startActivity(sourceIntent);
                 activity.runOnUiThread(this::dismissLoading);
             } catch (Exception e) {
