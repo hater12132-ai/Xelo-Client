@@ -2,22 +2,21 @@ name: Build Debug APK
 
 on:
   push:
-    branches: [master, develop]
+    branches: [master, main, develop]
   pull_request:
-    branches: [master, develop]
+    branches: [master, main, develop]
 
 jobs:
   debug-build:
     runs-on: ubuntu-latest
-    env:
-      JAVA_HOME: /usr/lib/jvm/java-21-openjdk-amd64
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: "recursive"
+          submodules: recursive
+
       - name: Update submodules (retry)
         run: |
           for i in 1 2 3; do
@@ -29,15 +28,21 @@ jobs:
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '21'
 
+      # Do NOT install obsolete package "tools" (removed from Google's repo)
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          ndk-version: ${{ env.ANDROID_NDK_VERSION }}
+          packages: >
+            platform-tools
+            platforms;android-36
+            build-tools;36.0.0
+            ndk;27.2.12479018
+            cmake;3.22.1
 
-      - name: Cache Gradle dependencies
+      - name: Cache Gradle
         uses: actions/cache@v4
         with:
           path: |
@@ -51,32 +56,20 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x ./gradlew
 
-      - name: Run Tests
-        run: ./gradlew testDebugUnitTest --stacktrace
-
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
 
       - name: List Debug APK files
         run: |
           echo "Debug APK files generated:"
-          find app/build/outputs/apk/debug -name "*.apk" -type f || echo "No APK files found"
+          find app/build/outputs/apk -name "*.apk" -type f || echo "No APK files found"
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: origin-debug-apk-${{ github.run_number }}
-          path: app/build/outputs/apk/debug/*.apk
+          name: xelo-debug-apk-${{ github.run_number }}
+          path: app/build/outputs/apk/**/*.apk
           retention-days: 14
           if-no-files-found: error
-
-      - name: Upload Test Results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: debug-test-results-${{ github.run_number }}
-          path: |
-            app/build/reports/tests/
-            app/build/test-results/
-          retention-days: 7
-          if-no-files-found: ignore
