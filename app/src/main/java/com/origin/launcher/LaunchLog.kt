@@ -4,20 +4,16 @@ import android.content.Context
 import android.os.Environment
 import android.util.Log
 import java.io.File
-import java.io.FileWriter
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/**
- * Writes launch diagnostics to a file Termux can read without READ_LOGS.
- * Path: /sdcard/Android/data/com.origin.launcher/files/xelo_launch.log
- * Fallback: /sdcard/Download/xelo_launch.log
- */
 object LaunchLog {
     private const val TAG = "XeloLaunchLog"
     private val fmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     @Volatile private var logFile: File? = null
+    @Volatile private var downloadFile: File? = null
 
     fun init(context: Context) {
         try {
@@ -25,11 +21,9 @@ object LaunchLog {
                 ?: File(Environment.getExternalStorageDirectory(), "Download")
             if (!dir.exists()) dir.mkdirs()
             logFile = File(dir, "xelo_launch.log")
-            // also mirror to Download for easy Termux access
-            val dl = File(Environment.getExternalStorageDirectory(), "Download/xelo_launch.log")
-            if (logFile?.absolutePath != dl.absolutePath) {
-                // keep primary in app files; copy path noted in first line
-            }
+            downloadFile = File(Environment.getExternalStorageDirectory(), "Download/xelo_launch.log")
+            logFile?.writeText("")
+            downloadFile?.writeText("")
             w("==== Xelo launch log start ${Date()} ====")
             w("filesDir=${context.filesDir}")
             w("extFiles=${context.getExternalFilesDir(null)}")
@@ -40,16 +34,23 @@ object LaunchLog {
     }
 
     fun w(msg: String) {
-        val line = "${fmt.format(Date())} $msg"
+        val line = "${fmt.format(Date())} $msg\n"
         Log.i(TAG, msg)
         try {
-            val f = logFile
-            if (f != null) {
-                FileWriter(f, true).use { it.append(line).append('\n') }
+            logFile?.let { f ->
+                FileOutputStream(f, true).use { o ->
+                    o.write(line.toByteArray())
+                    o.flush()
+                    o.fd.sync()
+                }
             }
-            // always try Download mirror so Termux can cat without special paths
-            val dl = File(Environment.getExternalStorageDirectory(), "Download/xelo_launch.log")
-            FileWriter(dl, true).use { it.append(line).append('\n') }
+            downloadFile?.let { f ->
+                FileOutputStream(f, true).use { o ->
+                    o.write(line.toByteArray())
+                    o.flush()
+                    o.fd.sync()
+                }
+            }
         } catch (_: Exception) {
         }
     }

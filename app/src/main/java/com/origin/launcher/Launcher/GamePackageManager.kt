@@ -266,47 +266,69 @@ class GamePackageManager private constructor(private val context: Context, priva
     }
 
     fun loadLibrary(name: String): Boolean {
-        val libFile = File(nativeLibDir, if (name.startsWith("lib")) name else "lib$name.so")
+        val plain = name.removePrefix("lib").removeSuffix(".so")
+        val libFile = File(nativeLibDir, "lib$plain.so")
         val libName = libFile.name
+        LaunchLog.w("ABOUT TO LOAD $plain path=${libFile.absolutePath} exists=${libFile.exists()} size=${if (libFile.exists()) libFile.length() else 0}")
         return if (systemLoadedLibs.contains(libName)) {
             try {
-                System.loadLibrary(name.removePrefix("lib").removeSuffix(".so"))
-                Log.d(TAG, "Loaded $name as system library")
+                System.loadLibrary(plain)
+                LaunchLog.w("Loaded system $plain OK")
                 true
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load system library $name: ${e.message}")
+            } catch (e: Throwable) {
+                LaunchLog.e("Failed system $plain", e)
                 false
             }
         } else {
             try {
                 if (libFile.exists() && libFile.length() > 0) {
                     System.load(libFile.absolutePath)
-                    Log.d(TAG, "Loaded $name from $nativeLibDir")
-                    LaunchLog.w("Loaded $name from $nativeLibDir")
+                    LaunchLog.w("Loaded $plain OK (${libFile.length()} bytes)")
                     true
                 } else {
-                    Log.w(TAG, "Library $name not found in $nativeLibDir, skipping")
-                    LaunchLog.w("Library $name NOT FOUND in $nativeLibDir")
+                    LaunchLog.w("SKIP $plain — not found in $nativeLibDir")
                     false
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load $name: ${e.message}")
-                LaunchLog.e("Failed to load $name", e)
+            } catch (e: Throwable) {
+                LaunchLog.e("Failed $plain", e)
                 false
             }
         }
     }
 
     fun loadAllLibraries(excludeLibs: Set<String> = emptySet()) {
-        val allLibs = requiredLibs + systemLoadedLibs
-        allLibs.forEach { lib ->
-            val libName = lib.removePrefix("lib").removeSuffix(".so")
-            if (excludeLibs.contains(libName) || excludeLibs.contains(lib)) {
-                Log.d(TAG, "Skipping excluded library: $libName")
+        // Do not preload maesdk/pairipcore first — they can SIGSEGV on 1.26.x
+        val coreOrder = listOf(
+            "c++_shared",
+            "fmod",
+            "MediaDecoders_Android",
+            "minecraftpe",
+            "xelo",
+            "mtbinloader2"
+        )
+        val optional = setOf("maesdk", "pairipcore", "HttpClient.Android", "PlayFabMultiplayer")
+        LaunchLog.w("loadAllLibraries nativeLibDir=$nativeLibDir excludes=$excludeLibs")
+        try {
+            File(nativeLibDir).listFiles()?.sortedBy { it.name }?.forEach {
+                LaunchLog.w("  extracted: ${it.name} (${it.length()} bytes)")
+            }
+        } catch (_: Exception) {}
+
+        coreOrder.forEach { libName ->
+            if (excludeLibs.contains(libName) || excludeLibs.contains("lib$libName.so")) {
+                LaunchLog.w("exclude $libName")
                 return@forEach
             }
             if (!loadLibrary(libName)) {
-                Log.e(TAG, "Failed to load required library $libName")
+                LaunchLog.w("core lib $libName failed (continuing if not minecraftpe)")
+            }
+        }
+        optional.forEach { libName ->
+            if (excludeLibs.contains(libName)) return@forEach
+            val f = File(nativeLibDir, "lib$libName.so")
+            if (f.exists() && f.length() > 0) {
+                LaunchLog.w("optional try $libName")
+                loadLibrary(libName)
             }
         }
     }
