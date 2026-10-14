@@ -72,11 +72,26 @@ repositories {
 
     ndkVersion "27.2.12479018"
 
+    // Ensure prebuilt jniLibs (libxelo, mtbinloader2) are packaged + extracted
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['src/main/jniLibs']
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     packagingOptions {
         pickFirst '**/libc++_shared.so'
         pickFirst '**/libjnidispatch.so'
         pickFirst '**/libxcrash.so'
         pickFirst '**/libxcrash_dumper.so'
+        pickFirst '**/libxelo.so'
+        pickFirst '**/libmtbinloader2.so'
 
         exclude 'META-INF/DEPENDENCIES'
         exclude 'META-INF/LICENSE'

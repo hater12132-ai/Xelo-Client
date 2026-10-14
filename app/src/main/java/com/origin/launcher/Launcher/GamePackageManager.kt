@@ -286,8 +286,8 @@ class GamePackageManager private constructor(private val context: Context, priva
         }
     }
 
-    // Libs shipped inside the Xelo APK (not Minecraft)
-    private val hostShippedLibs = setOf("xelo", "mtbinloader2", "xelo_init", "preloader")
+    // Libs shipped inside the Xelo APK (jniLibs), not the Minecraft package
+    private val hostShippedLibs = setOf("xelo", "mtbinloader2", "xelo_init", "preloader", "pairipcore")
 
     fun loadLibrary(name: String): Boolean {
         val plain = name.removePrefix("lib").removeSuffix(".so")
@@ -295,24 +295,33 @@ class GamePackageManager private constructor(private val context: Context, priva
         val hostLibDir = context.applicationInfo.nativeLibraryDir ?: ""
         val hostFile = File(hostLibDir, "lib$plain.so")
 
-        // Host-shipped injectors: load from Xelo app lib dir, never from MC package dir
         if (plain in hostShippedLibs) {
-            LaunchLog.w("ABOUT TO LOAD host $plain path=${hostFile.absolutePath} exists=${hostFile.exists()} size=${if (hostFile.exists()) hostFile.length() else 0}")
-            return try {
-                when {
-                    hostFile.exists() && hostFile.length() > 0 -> {
-                        System.load(hostFile.absolutePath)
-                        LaunchLog.w("Loaded host $plain OK (${hostFile.length()} bytes)")
-                        true
-                    }
-                    else -> {
-                        System.loadLibrary(plain)
-                        LaunchLog.w("Loaded host $plain via loadLibrary OK")
-                        true
-                    }
+            // Log what the host app actually has extracted
+            try {
+                File(hostLibDir).listFiles()?.sortedBy { it.name }?.forEach {
+                    LaunchLog.w("  host-lib-dir: ${it.name} (${it.length()})")
                 }
+            } catch (_: Exception) {}
+
+            LaunchLog.w("ABOUT TO LOAD host $plain hostPath=${hostFile.absolutePath} exists=${hostFile.exists()} size=${if (hostFile.exists()) hostFile.length() else 0}")
+            // 1) absolute path if extracted (legacy packaging)
+            if (hostFile.exists() && hostFile.length() > 0) {
+                return try {
+                    System.load(hostFile.absolutePath)
+                    LaunchLog.w("Loaded host $plain via absolute path OK")
+                    true
+                } catch (e: Throwable) {
+                    LaunchLog.e("Failed host $plain absolute", e)
+                    false
+                }
+            }
+            // 2) System.loadLibrary — works when lib is in APK even if not extracted
+            return try {
+                System.loadLibrary(plain)
+                LaunchLog.w("Loaded host $plain via loadLibrary OK")
+                true
             } catch (e: Throwable) {
-                LaunchLog.e("Failed host $plain", e)
+                LaunchLog.e("Failed host $plain loadLibrary", e)
                 false
             }
         }
@@ -324,7 +333,6 @@ class GamePackageManager private constructor(private val context: Context, priva
                 LaunchLog.w("Loaded $plain OK (${mcFile.length()} bytes)")
                 true
             } else {
-                // last resort: system loadLibrary (pairip etc.)
                 System.loadLibrary(plain)
                 LaunchLog.w("Loaded $plain via loadLibrary OK")
                 true
