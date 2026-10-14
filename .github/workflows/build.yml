@@ -31,7 +31,7 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      # Do NOT install obsolete package "tools" (removed from Google's repo)
+      # Install SDK packages WITHOUT ndk first (ndk zip often corrupts mid-download)
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
@@ -39,8 +39,50 @@ jobs:
             platform-tools
             platforms;android-36
             build-tools;36.0.0
-            ndk;27.2.12479018
             cmake;3.22.1
+
+      - name: Install NDK (retry, prefer preinstalled)
+        run: |
+          set -e
+          NDK_VERSION="27.2.12479018"
+          # Prefer any already-installed NDK 27.x on the runner image
+          if [ -d "$ANDROID_HOME/ndk" ]; then
+            echo "Existing NDKs:"
+            ls -la "$ANDROID_HOME/ndk" || true
+          fi
+          if [ -d "$ANDROID_HOME/ndk/$NDK_VERSION" ]; then
+            echo "NDK $NDK_VERSION already present"
+          else
+            # Fall back to another 27.x if present
+            FOUND=$(ls -1 "$ANDROID_HOME/ndk" 2>/dev/null | grep '^27\.' | head -1 || true)
+            if [ -n "$FOUND" ]; then
+              echo "Using preinstalled NDK $FOUND"
+              NDK_VERSION="$FOUND"
+            else
+              echo "Downloading NDK $NDK_VERSION with retries..."
+              for i in 1 2 3 4 5; do
+                if yes | sdkmanager --install "ndk;$NDK_VERSION"; then
+                  echo "NDK install OK on attempt $i"
+                  break
+                fi
+                echo "NDK install failed (attempt $i), cleaning partial and retrying..."
+                rm -rf "$ANDROID_HOME/ndk/$NDK_VERSION" || true
+                sleep 20
+                if [ "$i" = "5" ]; then
+                  echo "Trying alternate NDK 27.0.12077973..."
+                  NDK_VERSION="27.0.12077973"
+                  yes | sdkmanager --install "ndk;$NDK_VERSION" || true
+                fi
+              done
+            fi
+          fi
+          if [ ! -d "$ANDROID_HOME/ndk/$NDK_VERSION" ]; then
+            echo "ERROR: NDK not available at $ANDROID_HOME/ndk/$NDK_VERSION"
+            ls -la "$ANDROID_HOME/ndk" || true
+            exit 1
+          fi
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          echo "Using ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION"
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -58,8 +100,6 @@ jobs:
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
 
       - name: List Debug APK files
         run: |

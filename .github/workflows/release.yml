@@ -35,8 +35,30 @@ jobs:
             platform-tools
             platforms;android-36
             build-tools;36.0.0
-            ndk;27.2.12479018
             cmake;3.22.1
+
+      - name: Install NDK (retry, prefer preinstalled)
+        run: |
+          set -e
+          NDK_VERSION="27.2.12479018"
+          if [ -d "$ANDROID_HOME/ndk" ]; then ls -la "$ANDROID_HOME/ndk" || true; fi
+          if [ -d "$ANDROID_HOME/ndk/$NDK_VERSION" ]; then
+            echo "NDK $NDK_VERSION already present"
+          else
+            FOUND=$(ls -1 "$ANDROID_HOME/ndk" 2>/dev/null | grep '^27\.' | head -1 || true)
+            if [ -n "$FOUND" ]; then
+              NDK_VERSION="$FOUND"
+              echo "Using preinstalled NDK $FOUND"
+            else
+              for i in 1 2 3 4 5; do
+                yes | sdkmanager --install "ndk;$NDK_VERSION" && break
+                rm -rf "$ANDROID_HOME/ndk/$NDK_VERSION" || true
+                sleep 20
+              done
+            fi
+          fi
+          test -d "$ANDROID_HOME/ndk/$NDK_VERSION"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -54,8 +76,6 @@ jobs:
 
       - name: Build Release APK
         run: ./gradlew assembleRelease --stacktrace
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
 
       - name: List Release APK files
         run: |
