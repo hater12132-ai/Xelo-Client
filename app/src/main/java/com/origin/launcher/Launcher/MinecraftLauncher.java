@@ -101,12 +101,14 @@ public class MinecraftLauncher {
     }
 
     private void fillIntentWithMcPath(Intent sourceIntent, GameVersion version) {
-        if (FeatureSettings.getInstance().isVersionIsolationEnabled()) {
+        // Always pass real install flag so MinecraftActivity can resolve package libs
+        sourceIntent.putExtra("IS_INSTALLED", version.isInstalled);
+        if (FeatureSettings.getInstance().isVersionIsolationEnabled()
+                && version.versionDir != null) {
             sourceIntent.putExtra("MC_PATH", version.versionDir.getAbsolutePath());
-            sourceIntent.putExtra("IS_INSTALLED", version.isInstalled);
         } else {
-            sourceIntent.putExtra("MC_PATH", "");
-            sourceIntent.putExtra("IS_INSTALLED", false);
+            sourceIntent.putExtra("MC_PATH", version.isInstalled ? "" :
+                    (version.versionDir != null ? version.versionDir.getAbsolutePath() : ""));
         }
     }
 

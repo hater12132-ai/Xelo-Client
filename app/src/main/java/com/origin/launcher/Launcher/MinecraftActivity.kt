@@ -56,6 +56,7 @@ class MinecraftActivity : MainActivity() {
 
             gameManager = GamePackageManager.getInstance(applicationContext, version)
 
+            // Full dependency chain in THIS process (Activity may start without launcher preload)
             try {
                 LaunchLog.w("loading preloader")
                 System.loadLibrary("preloader")
@@ -65,14 +66,26 @@ class MinecraftActivity : MainActivity() {
                 Log.w(TAG, "Failed to load preloader: ${e.message}")
             }
 
+            // Order matters: minecraftpe DT_NEEDED includes fmod
+            LaunchLog.w("loading native deps for minecraftpe")
+            gameManager.loadLibrary("c++_shared")
+            gameManager.loadLibrary("HttpClient.Android") // optional; may fail
+            gameManager.loadLibrary("fmod")
+            gameManager.loadLibrary("MediaDecoders_Android")
             LaunchLog.w("loading minecraftpe")
             if (!gameManager.loadLibrary("minecraftpe")) {
                 LaunchLog.e("Failed to load libminecraftpe.so")
-                throw RuntimeException("Failed to load libminecraftpe.so")
+                throw RuntimeException("Failed to load libminecraftpe.so (check fmod/c++_shared)")
             }
             LaunchLog.w("minecraftpe OK — calling super.onCreate")
         } catch (e: Exception) {
             LaunchLog.e("MinecraftActivity load failed", e)
+            // MUST call super.onCreate or Android throws SuperNotCalledException
+            try {
+                super.onCreate(savedInstanceState)
+            } catch (t: Throwable) {
+                LaunchLog.e("super.onCreate after load failure", t)
+            }
             Toast.makeText(this, "Failed to load game: ${e.message}", Toast.LENGTH_LONG).show()
             finish()
             return
