@@ -16,6 +16,9 @@ import com.origin.launcher.LaunchLog
 
 class MinecraftActivity : MainActivity() {
 
+    /** Preloader: bind real minecraftpe ANativeActivity_onCreate / android_main */
+    external fun nativeOnLauncherLoaded(libPath: String)
+
     private lateinit var gameManager: GamePackageManager
     private var overlayManager: InbuiltOverlayManager? = null
 
@@ -84,6 +87,17 @@ class MinecraftActivity : MainActivity() {
                 LaunchLog.e("Failed to load preloader", e)
                 Log.w(TAG, "Failed to load preloader: ${e.message}")
             }
+
+            // REQUIRED: tell preloader where libminecraftpe.so is so it can
+            // resolve ANativeActivity_onCreate / android_main. Without this,
+            // GameActivity starts preloader with null handlers → black screen forever.
+            val pePath = gameManager.minecraftPeAbsolutePath
+            LaunchLog.w("nativeOnLauncherLoaded path=$pePath")
+            if (pePath.isNullOrEmpty() || !File(pePath).exists()) {
+                throw RuntimeException("libminecraftpe.so path missing for preloader: $pePath")
+            }
+            nativeOnLauncherLoaded(pePath)
+            LaunchLog.w("nativeOnLauncherLoaded OK")
 
             nativesOk = true
         } catch (e: Exception) {

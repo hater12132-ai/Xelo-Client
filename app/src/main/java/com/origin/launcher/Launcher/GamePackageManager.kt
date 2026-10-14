@@ -289,7 +289,12 @@ class GamePackageManager private constructor(private val context: Context, priva
     // Libs shipped inside the Xelo APK (jniLibs), not the Minecraft package
     private val hostShippedLibs = setOf("xelo", "mtbinloader2", "xelo_init", "preloader", "pairipcore")
 
+    /** Absolute path to libminecraftpe.so (for preloader nativeOnLauncherLoaded). */
+    val minecraftPeAbsolutePath: String
+        get() = File(nativeLibDir, "libminecraftpe.so").absolutePath
+
     fun loadLibrary(name: String): Boolean {
+
         val plain = name.removePrefix("lib").removeSuffix(".so")
         val mcFile = File(nativeLibDir, "lib$plain.so")
         val hostLibDir = context.applicationInfo.nativeLibraryDir ?: ""
