@@ -350,8 +350,7 @@ class GamePackageManager private constructor(private val context: Context, priva
             "fmod",
             "MediaDecoders_Android",
             "minecraftpe",
-            "xelo",
-            "mtbinloader2"
+            "xelo"
         )
         val optional = setOf("maesdk", "pairipcore", "HttpClient.Android", "PlayFabMultiplayer")
         LaunchLog.w("loadAllLibraries nativeLibDir=$nativeLibDir excludes=$excludeLibs")

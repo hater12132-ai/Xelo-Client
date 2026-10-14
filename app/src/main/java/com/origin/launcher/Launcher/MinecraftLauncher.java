@@ -156,13 +156,13 @@ public class MinecraftLauncher {
                 } catch (Throwable t) {
                     LaunchLog.INSTANCE.e("xelo_init runtime failed", t);
                 }
-                // Host injectors (optional for launch — game already has minecraftpe)
+                // Host injectors (optional — never fatal)
                 if (!gameManager.loadLibrary("xelo")) {
                     LaunchLog.INSTANCE.w("libxelo.so missing — continuing without injector");
                 }
-                if (!gameManager.loadLibrary("mtbinloader2")) {
-                    LaunchLog.INSTANCE.w("libmtbinloader2.so missing — continuing without materialbinloader");
-                }
+                // DO NOT load mtbinloader2 on 1.26.x — its embedded signatures are outdated
+                // and it calls abort("No signature was found") / "WE GOT BUSTED NOOO".
+                LaunchLog.INSTANCE.w("skipping mtbinloader2 (incompatible with 1.26.52.x signatures)");
 
                 LaunchLog.INSTANCE.w("startActivity MinecraftActivity");
                 activity.startActivity(sourceIntent);
