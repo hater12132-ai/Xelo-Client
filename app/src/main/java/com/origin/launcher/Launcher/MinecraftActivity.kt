@@ -22,6 +22,7 @@ class MinecraftActivity : MainActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         LaunchLog.init(applicationContext)
         LaunchLog.w("MinecraftActivity.onCreate begin")
+        var nativesOk = false
         try {
             val versionDir = intent.getStringExtra("MC_PATH")
             val versionCode = intent.getStringExtra("MINECRAFT_VERSION") ?: ""
@@ -56,9 +57,27 @@ class MinecraftActivity : MainActivity() {
 
             gameManager = GamePackageManager.getInstance(applicationContext, version)
 
-            // Full dependency chain in THIS process (Activity may start without launcher preload)
+            // CRITICAL: load Minecraft's libc++_shared BEFORE any host native (preloader/xelo)
+            // Host libs use NDK STL; if they load first, soname libc++_shared is bound to NDK
+            // and minecraftpe fails with missing __cxa_init_primary_exception.
+            LaunchLog.w("loading MC libc++_shared first (before preloader)")
+            if (!gameManager.loadLibrary("c++_shared")) {
+                throw RuntimeException("Failed to load MC libc++_shared.so")
+            }
+            gameManager.loadLibrary("HttpClient.Android") // optional
+            if (!gameManager.loadLibrary("fmod")) {
+                throw RuntimeException("Failed to load libfmod.so")
+            }
+            gameManager.loadLibrary("MediaDecoders_Android")
+            LaunchLog.w("loading minecraftpe")
+            if (!gameManager.loadLibrary("minecraftpe")) {
+                throw RuntimeException("Failed to load libminecraftpe.so")
+            }
+            LaunchLog.w("minecraftpe OK")
+
+            // Preloader AFTER minecraftpe so NDK c++ cannot steal the soname
             try {
-                LaunchLog.w("loading preloader")
+                LaunchLog.w("loading preloader (after minecraftpe)")
                 System.loadLibrary("preloader")
                 LaunchLog.w("preloader OK")
             } catch (e: Exception) {
@@ -66,40 +85,30 @@ class MinecraftActivity : MainActivity() {
                 Log.w(TAG, "Failed to load preloader: ${e.message}")
             }
 
-            // Order matters: minecraftpe DT_NEEDED includes fmod
-            LaunchLog.w("loading native deps for minecraftpe")
-            gameManager.loadLibrary("c++_shared")
-            gameManager.loadLibrary("HttpClient.Android") // optional; may fail
-            gameManager.loadLibrary("fmod")
-            gameManager.loadLibrary("MediaDecoders_Android")
-            LaunchLog.w("loading minecraftpe")
-            if (!gameManager.loadLibrary("minecraftpe")) {
-                LaunchLog.e("Failed to load libminecraftpe.so")
-                throw RuntimeException("Failed to load libminecraftpe.so (check fmod/c++_shared)")
-            }
-            LaunchLog.w("minecraftpe OK — calling super.onCreate")
+            nativesOk = true
         } catch (e: Exception) {
-            LaunchLog.e("MinecraftActivity load failed", e)
-            // MUST call super.onCreate or Android throws SuperNotCalledException
-            try {
-                super.onCreate(savedInstanceState)
-            } catch (t: Throwable) {
-                LaunchLog.e("super.onCreate after load failure", t)
-            }
-            Toast.makeText(this, "Failed to load game: ${e.message}", Toast.LENGTH_LONG).show()
+            LaunchLog.e("MinecraftActivity native load failed", e)
+        }
+
+        // ALWAYS call super.onCreate — Android requires it (SuperNotCalledException)
+        try {
+            super.onCreate(savedInstanceState)
+            LaunchLog.w("super.onCreate OK nativesOk=$nativesOk")
+        } catch (e: Exception) {
+            LaunchLog.e("super.onCreate failed", e)
+            Toast.makeText(this, "Game init failed: ${e.message}", Toast.LENGTH_LONG).show()
             finish()
             return
         }
-        try {
-            super.onCreate(savedInstanceState)
-            LaunchLog.w("super.onCreate OK")
-            MinecraftActivityState.onCreated(this)
-            LaunchLog.w("MinecraftActivity fully created")
-        } catch (e: Exception) {
-            LaunchLog.e("super.onCreate / post-init failed", e)
-            Toast.makeText(this, "Game init failed: ${e.message}", Toast.LENGTH_LONG).show()
+
+        if (!nativesOk) {
+            Toast.makeText(this, "Failed to load Minecraft native libraries", Toast.LENGTH_LONG).show()
             finish()
+            return
         }
+
+        MinecraftActivityState.onCreated(this)
+        LaunchLog.w("MinecraftActivity fully created")
     }
 
     private fun startInbuiltModServices() {
