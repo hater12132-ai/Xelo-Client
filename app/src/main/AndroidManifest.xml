@@ -77,9 +77,9 @@
             android:theme="@style/AppFullScreenTheme"
             tools:ignore="DiscouragedApi">
             <!-- minecraftpe: GameActivity uses code inside libminecraftpe.so (android_main is NOT exported for dlsym; preloader handoff fails → black screen) -->
-            <meta-data
-                android:name="android.app.lib_name"
-                android:value="minecraftpe" />
+            <!-- lib_name removed: GameActivity System.loadLibrary fails for MC path;
+                 we System.load(abs path) before super.onCreate instead -->
+            <!-- android.app.lib_name intentionally omitted -->
         </activity>
 
         <activity
