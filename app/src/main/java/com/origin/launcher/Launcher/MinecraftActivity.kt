@@ -12,7 +12,7 @@ import com.origin.launcher.Launcher.inbuilt.overlay.InbuiltOverlayManager
 import com.origin.launcher.versions.GameVersion
 import com.origin.launcher.utils.FeatureSettings
 import java.io.File
-import java.io.IOException
+import java.lang.reflect.Array as ReflectArray
 import com.origin.launcher.LaunchLog
 import dalvik.system.BaseDexClassLoader
 
@@ -22,60 +22,120 @@ class MinecraftActivity : MainActivity() {
     private var overlayManager: InbuiltOverlayManager? = null
 
     /**
-     * Put MC package nativeLibraryDir on ClassLoader search path so any
-     * remaining System.loadLibrary("minecraftpe") can resolve the file.
+     * Android 10–16: System.loadLibrary uses DexPathList.nativeLibraryPathElements
+     * which is NativeLibraryElement[], NOT Element[]. Build that array by hand so
+     * findLibrary("minecraftpe") resolves to the MC package lib dir.
      */
     private fun injectNativeLibraryPath(dir: String) {
         try {
-            val cl = classLoader as? BaseDexClassLoader ?: return
+            val cl = classLoader as? BaseDexClassLoader ?: run {
+                LaunchLog.w("inject: classLoader is not BaseDexClassLoader")
+                return
+            }
             val pathListField = BaseDexClassLoader::class.java.getDeclaredField("pathList")
             pathListField.isAccessible = true
             val pathList = pathListField.get(cl) ?: return
             val plClass = pathList.javaClass
+            val d = File(dir)
 
+            // 1) nativeLibraryDirectories: List<File>
             try {
                 val f = plClass.getDeclaredField("nativeLibraryDirectories")
                 f.isAccessible = true
                 @Suppress("UNCHECKED_CAST")
                 val list = f.get(pathList) as? MutableList<File>
-                if (list != null) {
-                    val d = File(dir)
-                    if (!list.contains(d)) {
-                        list.add(0, d)
-                        LaunchLog.w("inject: nativeLibraryDirectories += $dir")
-                    }
+                if (list != null && !list.contains(d)) {
+                    list.add(0, d)
+                    LaunchLog.w("inject: nativeLibraryDirectories += $dir")
                 }
             } catch (t: Throwable) {
-                LaunchLog.e("inject nativeLibraryDirectories failed", t)
+                LaunchLog.e("inject dirs failed", t)
             }
 
+            // 2) nativeLibraryPathElements: NativeLibraryElement[]
             try {
-                val dirsField = plClass.getDeclaredField("nativeLibraryDirectories")
-                dirsField.isAccessible = true
-                val dirs = dirsField.get(pathList)
-                val makePathElements = plClass.declaredMethods.firstOrNull {
-                    it.name == "makePathElements"
-                }
-                if (makePathElements != null && dirs != null) {
-                    makePathElements.isAccessible = true
-                    val elements = try {
-                        when (makePathElements.parameterTypes.size) {
-                            1 -> makePathElements.invoke(null, dirs)
-                            2 -> makePathElements.invoke(null, dirs, ArrayList<IOException>())
-                            else -> makePathElements.invoke(null, dirs, null, ArrayList<IOException>())
+                val nleClass = Class.forName("dalvik.system.DexPathList\$NativeLibraryElement")
+                val elField = plClass.getDeclaredField("nativeLibraryPathElements")
+                elField.isAccessible = true
+                val existing = elField.get(pathList)
+
+                // Collect dirs to put in elements
+                val dirList = mutableListOf<File>()
+                try {
+                    val f = plClass.getDeclaredField("nativeLibraryDirectories")
+                    f.isAccessible = true
+                    @Suppress("UNCHECKED_CAST")
+                    val list = f.get(pathList) as? List<File>
+                    if (list != null) dirList.addAll(list)
+                } catch (_: Throwable) { }
+                if (!dirList.contains(d)) dirList.add(0, d)
+
+                // Prefer makePathElements(List) that returns NativeLibraryElement[]
+                var built: Any? = null
+                for (m in plClass.declaredMethods.filter { it.name == "makePathElements" }) {
+                    try {
+                        m.isAccessible = true
+                        val ret = m.returnType
+                        if (ret.isArray && ret.componentType == nleClass) {
+                            built = when (m.parameterTypes.size) {
+                                1 -> m.invoke(null, dirList)
+                                else -> continue
+                            }
+                            LaunchLog.w("inject: makePathElements(NativeLibraryElement) OK")
+                            break
                         }
-                    } catch (_: Throwable) {
-                        null
+                    } catch (_: Throwable) { }
+                }
+
+                // Fallback: construct NativeLibraryElement(File) per dir
+                if (built == null) {
+                    val ctor = nleClass.declaredConstructors.firstOrNull {
+                        it.parameterTypes.size == 1 && it.parameterTypes[0] == File::class.java
+                    } ?: nleClass.declaredConstructors.firstOrNull {
+                        it.parameterTypes.isNotEmpty() && it.parameterTypes[0] == File::class.java
                     }
-                    if (elements != null) {
-                        val elField = plClass.getDeclaredField("nativeLibraryPathElements")
-                        elField.isAccessible = true
-                        elField.set(pathList, elements)
-                        LaunchLog.w("inject: rebuilt nativeLibraryPathElements")
+                    if (ctor == null) {
+                        LaunchLog.w("inject: no NativeLibraryElement constructor")
+                    } else {
+                        ctor.isAccessible = true
+                        val arr = ReflectArray.newInstance(nleClass, dirList.size)
+                        for (i in dirList.indices) {
+                            val inst = try {
+                                ctor.newInstance(dirList[i])
+                            } catch (_: Throwable) {
+                                // some versions: (File, boolean)
+                                try {
+                                    val c2 = nleClass.getDeclaredConstructor(File::class.java, Boolean::class.javaPrimitiveType)
+                                    c2.isAccessible = true
+                                    c2.newInstance(dirList[i], true)
+                                } catch (t2: Throwable) {
+                                    LaunchLog.e("NLE ctor failed for ${dirList[i]}", t2)
+                                    null
+                                }
+                            }
+                            if (inst != null) ReflectArray.set(arr, i, inst)
+                        }
+                        built = arr
+                        LaunchLog.w("inject: built NativeLibraryElement[${dirList.size}] manually")
                     }
+                }
+
+                if (built != null) {
+                    elField.set(pathList, built)
+                    LaunchLog.w("inject: nativeLibraryPathElements set OK")
+                }
+
+                // Verify findLibrary
+                try {
+                    val findLib = BaseDexClassLoader::class.java.getDeclaredMethod("findLibrary", String::class.java)
+                    findLib.isAccessible = true
+                    val found = findLib.invoke(cl, "minecraftpe") as? String
+                    LaunchLog.w("inject: findLibrary(minecraftpe)=$found")
+                } catch (t: Throwable) {
+                    LaunchLog.e("findLibrary check failed", t)
                 }
             } catch (t: Throwable) {
-                LaunchLog.e("inject pathElements failed", t)
+                LaunchLog.e("inject NativeLibraryElement failed", t)
             }
         } catch (t: Throwable) {
             LaunchLog.e("injectNativeLibraryPath failed", t)
@@ -113,7 +173,6 @@ class MinecraftActivity : MainActivity() {
 
             gameManager = GamePackageManager.getInstance(applicationContext, version)
 
-            // Absolute System.load — do NOT rely on System.loadLibrary for MC
             LaunchLog.w("loading MC natives (absolute path)")
             if (!gameManager.loadLibrary("c++_shared")) throw RuntimeException("c++_shared")
             gameManager.loadLibrary("HttpClient.Android")
@@ -125,7 +184,6 @@ class MinecraftActivity : MainActivity() {
             val peDir = File(gameManager.minecraftPeAbsolutePath).parentFile?.absolutePath
             if (peDir != null) injectNativeLibraryPath(peDir)
 
-            // Optional preloader for mods only
             try {
                 System.loadLibrary("preloader")
                 LaunchLog.w("preloader OK")
@@ -139,11 +197,9 @@ class MinecraftActivity : MainActivity() {
             LaunchLog.e("MinecraftActivity native load failed", t)
         }
 
-        // CRITICAL: must call super.onCreate or Android throws SuperNotCalledException.
-        // Catch Throwable (UnsatisfiedLinkError is an Error, not Exception).
         var superOk = false
         try {
-            LaunchLog.w("calling super.onCreate")
+            LaunchLog.w("calling super.onCreate (lib_name=minecraftpe)")
             super.onCreate(savedInstanceState)
             superOk = true
             LaunchLog.w("super.onCreate OK nativesOk=$nativesOk")
@@ -153,9 +209,6 @@ class MinecraftActivity : MainActivity() {
         }
 
         if (!superOk) {
-            // Last-ditch: Android still requires Activity.onCreate to have been called.
-            // If GameActivity threw before reaching Activity.super, we cannot recover —
-            // finish and return; process may still report SuperNotCalledException.
             try {
                 Toast.makeText(this, "Game init failed: ${loadError?.message}", Toast.LENGTH_LONG).show()
             } catch (_: Throwable) { }
