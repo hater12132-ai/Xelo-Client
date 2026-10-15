@@ -3,7 +3,6 @@ package com.origin.launcher.Launcher
 import android.content.Intent
 import android.content.res.AssetManager
 import android.os.Bundle
-import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.widget.Toast
@@ -12,33 +11,25 @@ import com.origin.launcher.Launcher.inbuilt.overlay.InbuiltOverlayManager
 import com.origin.launcher.versions.GameVersion
 import com.origin.launcher.utils.FeatureSettings
 import java.io.File
-import java.lang.reflect.Array as ReflectArray
 import com.origin.launcher.LaunchLog
 import dalvik.system.BaseDexClassLoader
+import java.lang.reflect.Array as ReflectArray
 
 class MinecraftActivity : MainActivity() {
+
+    external fun nativeOnLauncherLoaded(libPath: String)
 
     private lateinit var gameManager: GamePackageManager
     private var overlayManager: InbuiltOverlayManager? = null
 
-    /**
-     * Android 10–16: System.loadLibrary uses DexPathList.nativeLibraryPathElements
-     * which is NativeLibraryElement[], NOT Element[]. Build that array by hand so
-     * findLibrary("minecraftpe") resolves to the MC package lib dir.
-     */
     private fun injectNativeLibraryPath(dir: String) {
         try {
-            val cl = classLoader as? BaseDexClassLoader ?: run {
-                LaunchLog.w("inject: classLoader is not BaseDexClassLoader")
-                return
-            }
+            val cl = classLoader as? BaseDexClassLoader ?: return
             val pathListField = BaseDexClassLoader::class.java.getDeclaredField("pathList")
             pathListField.isAccessible = true
             val pathList = pathListField.get(cl) ?: return
             val plClass = pathList.javaClass
             val d = File(dir)
-
-            // 1) nativeLibraryDirectories: List<File>
             try {
                 val f = plClass.getDeclaredField("nativeLibraryDirectories")
                 f.isAccessible = true
@@ -46,160 +37,108 @@ class MinecraftActivity : MainActivity() {
                 val list = f.get(pathList) as? MutableList<File>
                 if (list != null && !list.contains(d)) {
                     list.add(0, d)
-                    LaunchLog.w("inject: nativeLibraryDirectories += $dir")
+                    LaunchLog.w("inject: dirs += $dir")
                 }
             } catch (t: Throwable) {
                 LaunchLog.e("inject dirs failed", t)
             }
-
-            // 2) nativeLibraryPathElements: NativeLibraryElement[]
             try {
                 val nleClass = Class.forName("dalvik.system.DexPathList\$NativeLibraryElement")
                 val elField = plClass.getDeclaredField("nativeLibraryPathElements")
                 elField.isAccessible = true
-                val existing = elField.get(pathList)
-
-                // Collect dirs to put in elements
                 val dirList = mutableListOf<File>()
                 try {
                     val f = plClass.getDeclaredField("nativeLibraryDirectories")
                     f.isAccessible = true
                     @Suppress("UNCHECKED_CAST")
-                    val list = f.get(pathList) as? List<File>
-                    if (list != null) dirList.addAll(list)
-                } catch (_: Throwable) { }
+                    (f.get(pathList) as? List<File>)?.let { dirList.addAll(it) }
+                } catch (_: Throwable) {}
                 if (!dirList.contains(d)) dirList.add(0, d)
-
-                // Prefer makePathElements(List) that returns NativeLibraryElement[]
                 var built: Any? = null
                 for (m in plClass.declaredMethods.filter { it.name == "makePathElements" }) {
                     try {
                         m.isAccessible = true
-                        val ret = m.returnType
-                        if (ret.isArray && ret.componentType == nleClass) {
-                            built = when (m.parameterTypes.size) {
-                                1 -> m.invoke(null, dirList)
-                                else -> continue
-                            }
-                            LaunchLog.w("inject: makePathElements(NativeLibraryElement) OK")
+                        if (m.returnType.isArray && m.returnType.componentType == nleClass && m.parameterTypes.size == 1) {
+                            built = m.invoke(null, dirList)
                             break
                         }
-                    } catch (_: Throwable) { }
+                    } catch (_: Throwable) {}
                 }
-
-                // Fallback: construct NativeLibraryElement(File) per dir
                 if (built == null) {
                     val ctor = nleClass.declaredConstructors.firstOrNull {
-                        it.parameterTypes.size == 1 && it.parameterTypes[0] == File::class.java
-                    } ?: nleClass.declaredConstructors.firstOrNull {
                         it.parameterTypes.isNotEmpty() && it.parameterTypes[0] == File::class.java
                     }
-                    if (ctor == null) {
-                        LaunchLog.w("inject: no NativeLibraryElement constructor")
-                    } else {
+                    if (ctor != null) {
                         ctor.isAccessible = true
                         val arr = ReflectArray.newInstance(nleClass, dirList.size)
                         for (i in dirList.indices) {
-                            val inst = try {
-                                ctor.newInstance(dirList[i])
-                            } catch (_: Throwable) {
-                                // some versions: (File, boolean)
-                                try {
-                                    val c2 = nleClass.getDeclaredConstructor(File::class.java, Boolean::class.javaPrimitiveType)
-                                    c2.isAccessible = true
-                                    c2.newInstance(dirList[i], true)
-                                } catch (t2: Throwable) {
-                                    LaunchLog.e("NLE ctor failed for ${dirList[i]}", t2)
-                                    null
-                                }
-                            }
-                            if (inst != null) ReflectArray.set(arr, i, inst)
+                            try {
+                                ReflectArray.set(arr, i, ctor.newInstance(dirList[i]))
+                            } catch (_: Throwable) {}
                         }
                         built = arr
-                        LaunchLog.w("inject: built NativeLibraryElement[${dirList.size}] manually")
                     }
                 }
-
                 if (built != null) {
                     elField.set(pathList, built)
-                    LaunchLog.w("inject: nativeLibraryPathElements set OK")
-                }
-
-                // Verify findLibrary
-                try {
-                    val findLib = BaseDexClassLoader::class.java.getDeclaredMethod("findLibrary", String::class.java)
-                    findLib.isAccessible = true
-                    val found = findLib.invoke(cl, "minecraftpe") as? String
-                    LaunchLog.w("inject: findLibrary(minecraftpe)=$found")
-                } catch (t: Throwable) {
-                    LaunchLog.e("findLibrary check failed", t)
+                    LaunchLog.w("inject: NativeLibraryElement OK")
                 }
             } catch (t: Throwable) {
-                LaunchLog.e("inject NativeLibraryElement failed", t)
+                LaunchLog.e("inject NLE failed", t)
             }
         } catch (t: Throwable) {
-            LaunchLog.e("injectNativeLibraryPath failed", t)
+            LaunchLog.e("inject failed", t)
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         LaunchLog.init(applicationContext)
         LaunchLog.w("MinecraftActivity.onCreate begin")
-
         var nativesOk = false
         var loadError: Throwable? = null
-
         try {
             val versionDir = intent.getStringExtra("MC_PATH")
             val versionCode = intent.getStringExtra("MINECRAFT_VERSION") ?: ""
             val versionDirName = intent.getStringExtra("MINECRAFT_VERSION_DIR") ?: ""
             val isInstalled = intent.getBooleanExtra("IS_INSTALLED", false)
             val isIsolated = FeatureSettings.getInstance().isVersionIsolationEnabled()
-            LaunchLog.w("MC_PATH=$versionDir version=$versionCode dirName=$versionDirName installed=$isInstalled isolated=$isIsolated")
+            LaunchLog.w("MC_PATH=$versionDir version=$versionCode installed=$isInstalled isolated=$isIsolated")
 
             val version = if (isIsolated && !versionDir.isNullOrEmpty()) {
-                GameVersion(
-                    versionDirName, versionCode, versionCode,
-                    File(versionDir), isInstalled,
-                    MinecraftLauncher.MC_PACKAGE_NAME, ""
-                )
+                GameVersion(versionDirName, versionCode, versionCode, File(versionDir), isInstalled, MinecraftLauncher.MC_PACKAGE_NAME, "")
             } else if (versionCode.isNotEmpty()) {
-                GameVersion(
-                    versionDirName, versionCode, versionCode,
-                    File(versionDir ?: ""), true,
-                    MinecraftLauncher.MC_PACKAGE_NAME, ""
-                )
+                GameVersion(versionDirName, versionCode, versionCode, File(versionDir ?: ""), true, MinecraftLauncher.MC_PACKAGE_NAME, "")
             } else null
 
             gameManager = GamePackageManager.getInstance(applicationContext, version)
 
-            LaunchLog.w("loading MC natives (absolute path)")
+            LaunchLog.w("loading MC natives")
             if (!gameManager.loadLibrary("c++_shared")) throw RuntimeException("c++_shared")
             gameManager.loadLibrary("HttpClient.Android")
             if (!gameManager.loadLibrary("fmod")) throw RuntimeException("fmod")
             gameManager.loadLibrary("MediaDecoders_Android")
             if (!gameManager.loadLibrary("minecraftpe")) throw RuntimeException("minecraftpe")
-            LaunchLog.w("minecraftpe OK via System.load")
+            LaunchLog.w("minecraftpe OK")
 
-            val peDir = File(gameManager.minecraftPeAbsolutePath).parentFile?.absolutePath
-            if (peDir != null) injectNativeLibraryPath(peDir)
+            File(gameManager.minecraftPeAbsolutePath).parentFile?.absolutePath?.let { injectNativeLibraryPath(it) }
 
-            try {
-                System.loadLibrary("preloader")
-                LaunchLog.w("preloader OK")
-            } catch (t: Throwable) {
-                LaunchLog.e("preloader skipped", t)
-            }
+            System.loadLibrary("preloader")
+            LaunchLog.w("preloader OK")
+
+            val pe = gameManager.minecraftPeAbsolutePath
+            LaunchLog.w("nativeOnLauncherLoaded $pe")
+            nativeOnLauncherLoaded(pe)
+            LaunchLog.w("nativeOnLauncherLoaded returned")
 
             nativesOk = true
         } catch (t: Throwable) {
             loadError = t
-            LaunchLog.e("MinecraftActivity native load failed", t)
+            LaunchLog.e("native load failed", t)
         }
 
         var superOk = false
         try {
-            LaunchLog.w("calling super.onCreate (lib_name=minecraftpe)")
+            LaunchLog.w("calling super.onCreate (lib_name=preloader)")
             super.onCreate(savedInstanceState)
             superOk = true
             LaunchLog.w("super.onCreate OK nativesOk=$nativesOk")
@@ -209,19 +148,15 @@ class MinecraftActivity : MainActivity() {
         }
 
         if (!superOk) {
-            try {
-                Toast.makeText(this, "Game init failed: ${loadError?.message}", Toast.LENGTH_LONG).show()
-            } catch (_: Throwable) { }
-            try { finish() } catch (_: Throwable) { }
+            try { Toast.makeText(this, "Game init failed: ${loadError?.message}", Toast.LENGTH_LONG).show() } catch (_: Throwable) {}
+            try { finish() } catch (_: Throwable) {}
             return
         }
-
         if (!nativesOk) {
-            Toast.makeText(this, "Failed to load Minecraft libraries: ${loadError?.message}", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Failed to load natives: ${loadError?.message}", Toast.LENGTH_LONG).show()
             finish()
             return
         }
-
         MinecraftActivityState.onCreated(this)
         LaunchLog.w("MinecraftActivity fully created")
     }
@@ -230,102 +165,55 @@ class MinecraftActivity : MainActivity() {
         overlayManager = InbuiltOverlayManager(this)
         overlayManager?.showEnabledOverlays()
     }
-
     private fun stopInbuiltModServices() {
         overlayManager?.hideAllOverlays()
         overlayManager = null
     }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-    }
-
+    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent) }
     override fun onResume() {
         super.onResume()
         MinecraftActivityState.onResumed()
         if (overlayManager == null) startInbuiltModServices()
     }
-
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        overlayManager?.let { manager ->
-            if (manager.handleKeyEvent(event.keyCode, event.action)) return true
-        }
+        overlayManager?.let { if (it.handleKeyEvent(event.keyCode, event.action)) return true }
         return super.dispatchKeyEvent(event)
     }
-
-    override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
-        return super.dispatchGenericMotionEvent(ev)
-    }
-
-    override fun onWindowFocusChanged(hasFocus: Boolean) {
-        super.onWindowFocusChanged(hasFocus)
-    }
-
-    override fun onStop() {
-        stopInbuiltModServices()
-        super.onStop()
-    }
-
-    override fun onDestroy() {
-        stopInbuiltModServices()
-        MinecraftActivityState.onDestroyed()
-        super.onDestroy()
-    }
-
-    override fun getAssets(): AssetManager {
-        return try { gameManager.getAssets() } catch (e: Exception) { super.getAssets() }
-    }
-
+    override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean = super.dispatchGenericMotionEvent(ev)
+    override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus) }
+    override fun onStop() { stopInbuiltModServices(); super.onStop() }
+    override fun onDestroy() { stopInbuiltModServices(); MinecraftActivityState.onDestroyed(); super.onDestroy() }
+    override fun getAssets(): AssetManager = try { gameManager.getAssets() } catch (e: Exception) { super.getAssets() }
     override fun getFilesDir(): File {
         val mcPath = intent.getStringExtra("MC_PATH")
         val isol = FeatureSettings.getInstance().isVersionIsolationEnabled()
-        return if (isol && !mcPath.isNullOrEmpty()) {
-            File(mcPath, "files").also { if (!it.exists()) it.mkdirs() }
-        } else super.getFilesDir()
+        return if (isol && !mcPath.isNullOrEmpty()) File(mcPath, "files").also { if (!it.exists()) it.mkdirs() } else super.getFilesDir()
     }
-
-    override fun tick() {
-        super.tick()
-        overlayManager?.tick()
-    }
-
+    override fun tick() { super.tick(); overlayManager?.tick() }
     override fun getDataDir(): File {
         val mcPath = intent.getStringExtra("MC_PATH")
         val isol = FeatureSettings.getInstance().isVersionIsolationEnabled()
-        return if (isol && !mcPath.isNullOrEmpty()) {
-            File(mcPath).also { if (!it.exists()) it.mkdirs() }
-        } else super.getDataDir()
+        return if (isol && !mcPath.isNullOrEmpty()) File(mcPath).also { if (!it.exists()) it.mkdirs() } else super.getDataDir()
     }
-
     override fun getExternalFilesDir(type: String?): File? {
         val mcPath = intent.getStringExtra("MC_PATH")
         val isol = FeatureSettings.getInstance().isVersionIsolationEnabled()
         return if (isol && !mcPath.isNullOrEmpty()) {
-            val externalDir = if (type != null) File(mcPath, "games/com.mojang/$type")
-            else File(mcPath, "games/com.mojang")
-            if (!externalDir.exists()) externalDir.mkdirs()
-            externalDir
+            val d = if (type != null) File(mcPath, "games/com.mojang/$type") else File(mcPath, "games/com.mojang")
+            if (!d.exists()) d.mkdirs(); d
         } else super.getExternalFilesDir(type)
     }
-
     override fun getDatabasePath(name: String): File {
         val mcPath = intent.getStringExtra("MC_PATH")
         val isol = FeatureSettings.getInstance().isVersionIsolationEnabled()
         return if (isol && !mcPath.isNullOrEmpty()) {
-            val dbDir = File(mcPath, "databases").also { if (!it.exists()) it.mkdirs() }
-            File(dbDir, name)
+            File(File(mcPath, "databases").also { if (!it.exists()) it.mkdirs() }, name)
         } else super.getDatabasePath(name)
     }
-
     override fun getCacheDir(): File {
         val mcPath = intent.getStringExtra("MC_PATH")
         val isol = FeatureSettings.getInstance().isVersionIsolationEnabled()
-        return if (isol && !mcPath.isNullOrEmpty()) {
-            File(mcPath, "cache").also { if (!it.exists()) it.mkdirs() }
-        } else super.getCacheDir()
+        return if (isol && !mcPath.isNullOrEmpty()) File(mcPath, "cache").also { if (!it.exists()) it.mkdirs() } else super.getCacheDir()
     }
-
-    companion object {
-        private const val TAG = "MinecraftActivity"
-    }
+    companion object { private const val TAG = "MinecraftActivity" }
 }
