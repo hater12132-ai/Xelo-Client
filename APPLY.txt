@@ -1,0 +1,16 @@
+MUST do this so CI rebuilds libpreloader.so:
+
+1. unzip this archive into the repo root
+2. Ensure submodule PreLoader.cpp is replaced:
+
+   find app -name PreLoader.cpp
+   # copy zip's PreLoader.cpp over that path
+
+3. git add -A && commit && push
+
+4. After install, log MUST show:
+   nativeOnLauncherLoaded bound=true
+   super.onCreate OK
+   MinecraftActivity fully created
+
+If bound=false, the preloader .so was NOT rebuilt from the patched source.

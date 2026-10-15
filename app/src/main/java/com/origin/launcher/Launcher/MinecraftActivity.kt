@@ -17,7 +17,8 @@ import java.lang.reflect.Array as ReflectArray
 
 class MinecraftActivity : MainActivity() {
 
-    external fun nativeOnLauncherLoaded(libPath: String)
+    /** @return true if android_main was bound (dlsym or 1.26.52.3 offset). */
+    external fun nativeOnLauncherLoaded(libPath: String): Boolean
 
     private lateinit var gameManager: GamePackageManager
     private var overlayManager: InbuiltOverlayManager? = null
@@ -35,13 +36,8 @@ class MinecraftActivity : MainActivity() {
                 f.isAccessible = true
                 @Suppress("UNCHECKED_CAST")
                 val list = f.get(pathList) as? MutableList<File>
-                if (list != null && !list.contains(d)) {
-                    list.add(0, d)
-                    LaunchLog.w("inject: dirs += $dir")
-                }
-            } catch (t: Throwable) {
-                LaunchLog.e("inject dirs failed", t)
-            }
+                if (list != null && !list.contains(d)) list.add(0, d)
+            } catch (_: Throwable) {}
             try {
                 val nleClass = Class.forName("dalvik.system.DexPathList\$NativeLibraryElement")
                 val elField = plClass.getDeclaredField("nativeLibraryPathElements")
@@ -59,8 +55,7 @@ class MinecraftActivity : MainActivity() {
                     try {
                         m.isAccessible = true
                         if (m.returnType.isArray && m.returnType.componentType == nleClass && m.parameterTypes.size == 1) {
-                            built = m.invoke(null, dirList)
-                            break
+                            built = m.invoke(null, dirList); break
                         }
                     } catch (_: Throwable) {}
                 }
@@ -72,23 +67,14 @@ class MinecraftActivity : MainActivity() {
                         ctor.isAccessible = true
                         val arr = ReflectArray.newInstance(nleClass, dirList.size)
                         for (i in dirList.indices) {
-                            try {
-                                ReflectArray.set(arr, i, ctor.newInstance(dirList[i]))
-                            } catch (_: Throwable) {}
+                            try { ReflectArray.set(arr, i, ctor.newInstance(dirList[i])) } catch (_: Throwable) {}
                         }
                         built = arr
                     }
                 }
-                if (built != null) {
-                    elField.set(pathList, built)
-                    LaunchLog.w("inject: NativeLibraryElement OK")
-                }
-            } catch (t: Throwable) {
-                LaunchLog.e("inject NLE failed", t)
-            }
-        } catch (t: Throwable) {
-            LaunchLog.e("inject failed", t)
-        }
+                if (built != null) elField.set(pathList, built)
+            } catch (_: Throwable) {}
+        } catch (_: Throwable) {}
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -127,8 +113,11 @@ class MinecraftActivity : MainActivity() {
 
             val pe = gameManager.minecraftPeAbsolutePath
             LaunchLog.w("nativeOnLauncherLoaded $pe")
-            nativeOnLauncherLoaded(pe)
-            LaunchLog.w("nativeOnLauncherLoaded returned")
+            val bound = nativeOnLauncherLoaded(pe)
+            LaunchLog.w("nativeOnLauncherLoaded bound=$bound")
+            if (!bound) {
+                throw RuntimeException("android_main not bound — rebuild preloader with 1.26.52.3 offset patch")
+            }
 
             nativesOk = true
         } catch (t: Throwable) {
@@ -138,7 +127,7 @@ class MinecraftActivity : MainActivity() {
 
         var superOk = false
         try {
-            LaunchLog.w("calling super.onCreate (lib_name=preloader)")
+            LaunchLog.w("calling super.onCreate (MainActivity → GameActivity)")
             super.onCreate(savedInstanceState)
             superOk = true
             LaunchLog.w("super.onCreate OK nativesOk=$nativesOk")
@@ -215,5 +204,4 @@ class MinecraftActivity : MainActivity() {
         val isol = FeatureSettings.getInstance().isVersionIsolationEnabled()
         return if (isol && !mcPath.isNullOrEmpty()) File(mcPath, "cache").also { if (!it.exists()) it.mkdirs() } else super.getCacheDir()
     }
-    companion object { private const val TAG = "MinecraftActivity" }
 }

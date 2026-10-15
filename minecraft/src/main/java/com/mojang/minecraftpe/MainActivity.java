@@ -430,7 +430,13 @@ public class MainActivity extends GameActivity implements View.OnKeyListener, Fi
         if (getResources() == null) {
             Process.killProcess(Process.myPid());
         }
-        nativeWaitCrashManagementSetupComplete();
+        // Under Xelo launcher the crash-management native signal never arrives → infinite hang / black screen.
+        // Only wait when running as the real Minecraft package.
+        if ("com.mojang.minecraftpe".equals(getPackageName())) {
+            nativeWaitCrashManagementSetupComplete();
+        } else {
+            android.util.Log.w("MainActivity", "skip nativeWaitCrashManagementSetupComplete (launcher package=" + getPackageName() + ")");
+        }
         initializeAppExitInfoHelper();
         mBrazeManager = new BrazeManager();
         if (isEduMode()) {
