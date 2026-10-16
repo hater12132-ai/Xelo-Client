@@ -77,7 +77,23 @@ class MinecraftActivity : MainActivity() {
         } catch (_: Throwable) {}
     }
 
+    // An app can read logcat lines from its own UID, including earlier processes.
+    // Save them before anything else so a crash in the previous launch is captured.
+    private fun dumpPreviousLogcat() {
+        Thread {
+            try {
+                val dir = getExternalFilesDir(null) ?: return@Thread
+                val out = java.io.File(dir, "prev_logcat.txt")
+                val proc = ProcessBuilder("logcat", "-d", "-v", "threadtime", "-t", "4000")
+                    .redirectErrorStream(true).start()
+                out.outputStream().use { o -> proc.inputStream.copyTo(o) }
+                proc.waitFor()
+            } catch (_: Throwable) {}
+        }.apply { name = "xelo-logcat-dump" }.start()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
+        dumpPreviousLogcat()
         LaunchLog.init(applicationContext)
         LaunchLog.w("MinecraftActivity.onCreate begin")
         var nativesOk = false
