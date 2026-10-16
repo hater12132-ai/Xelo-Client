@@ -5,6 +5,7 @@ import android.content.res.AssetManager
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.WindowManager
 import android.widget.Toast
 import com.mojang.minecraftpe.MainActivity
 import com.origin.launcher.Launcher.inbuilt.overlay.InbuiltOverlayManager
@@ -17,7 +18,6 @@ import java.lang.reflect.Array as ReflectArray
 
 class MinecraftActivity : MainActivity() {
 
-    /** @return true if android_main was bound (dlsym or 1.26.52.3 offset). */
     external fun nativeOnLauncherLoaded(libPath: String): Boolean
 
     private lateinit var gameManager: GamePackageManager
@@ -112,12 +112,9 @@ class MinecraftActivity : MainActivity() {
             LaunchLog.w("preloader OK")
 
             val pe = gameManager.minecraftPeAbsolutePath
-            LaunchLog.w("nativeOnLauncherLoaded $pe")
             val bound = nativeOnLauncherLoaded(pe)
             LaunchLog.w("nativeOnLauncherLoaded bound=$bound")
-            if (!bound) {
-                throw RuntimeException("android_main not bound — rebuild preloader with 1.26.52.3 offset patch")
-            }
+            if (!bound) throw RuntimeException("android_main not bound")
 
             nativesOk = true
         } catch (t: Throwable) {
@@ -125,12 +122,17 @@ class MinecraftActivity : MainActivity() {
             LaunchLog.e("native load failed", t)
         }
 
+        // Keep screen on while debugging black screen
+        try {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } catch (_: Throwable) {}
+
         var superOk = false
         try {
-            LaunchLog.w("calling super.onCreate (MainActivity → GameActivity)")
+            LaunchLog.w("calling super.onCreate")
             super.onCreate(savedInstanceState)
             superOk = true
-            LaunchLog.w("super.onCreate OK nativesOk=$nativesOk")
+            LaunchLog.w("super.onCreate OK")
         } catch (t: Throwable) {
             LaunchLog.e("super.onCreate failed", t)
             loadError = t
@@ -142,36 +144,55 @@ class MinecraftActivity : MainActivity() {
             return
         }
         if (!nativesOk) {
-            Toast.makeText(this, "Failed to load natives: ${loadError?.message}", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Failed natives: ${loadError?.message}", Toast.LENGTH_LONG).show()
             finish()
             return
         }
         MinecraftActivityState.onCreated(this)
-        LaunchLog.w("MinecraftActivity fully created")
+        LaunchLog.w("MinecraftActivity fully created — check /sdcard/Download/xelo_android_main.txt")
     }
 
-    private fun startInbuiltModServices() {
-        overlayManager = InbuiltOverlayManager(this)
-        overlayManager?.showEnabledOverlays()
+    override fun onStart() {
+        LaunchLog.w("onStart")
+        super.onStart()
     }
+
+    override fun onResume() {
+        LaunchLog.w("onResume")
+        super.onResume()
+        MinecraftActivityState.onResumed()
+        if (overlayManager == null) {
+            try {
+                overlayManager = InbuiltOverlayManager(this)
+                overlayManager?.showEnabledOverlays()
+            } catch (t: Throwable) {
+                LaunchLog.e("overlay failed", t)
+            }
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        LaunchLog.w("onWindowFocusChanged focus=$hasFocus")
+        super.onWindowFocusChanged(hasFocus)
+    }
+
     private fun stopInbuiltModServices() {
         overlayManager?.hideAllOverlays()
         overlayManager = null
     }
     override fun onNewIntent(intent: Intent) { super.onNewIntent(intent) }
-    override fun onResume() {
-        super.onResume()
-        MinecraftActivityState.onResumed()
-        if (overlayManager == null) startInbuiltModServices()
-    }
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         overlayManager?.let { if (it.handleKeyEvent(event.keyCode, event.action)) return true }
         return super.dispatchKeyEvent(event)
     }
     override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean = super.dispatchGenericMotionEvent(ev)
-    override fun onWindowFocusChanged(hasFocus: Boolean) { super.onWindowFocusChanged(hasFocus) }
     override fun onStop() { stopInbuiltModServices(); super.onStop() }
-    override fun onDestroy() { stopInbuiltModServices(); MinecraftActivityState.onDestroyed(); super.onDestroy() }
+    override fun onDestroy() {
+        LaunchLog.w("onDestroy")
+        stopInbuiltModServices()
+        MinecraftActivityState.onDestroyed()
+        super.onDestroy()
+    }
     override fun getAssets(): AssetManager = try { gameManager.getAssets() } catch (e: Exception) { super.getAssets() }
     override fun getFilesDir(): File {
         val mcPath = intent.getStringExtra("MC_PATH")
