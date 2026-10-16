@@ -154,7 +154,23 @@ class MinecraftActivity : MainActivity() {
 
     override fun onStart() {
         LaunchLog.w("onStart")
+        startMainThreadWatchdog()
         super.onStart()
+        LaunchLog.w("onStart returned")
+    }
+
+    // If the UI thread blocks (e.g. GameActivity waiting for android_main), dump where it is stuck.
+    private fun startMainThreadWatchdog() {
+        val mainThread = android.os.Looper.getMainLooper().thread
+        Thread {
+            try {
+                for (sec in intArrayOf(3, 6)) {
+                    Thread.sleep(3000)
+                    val st = mainThread.stackTrace.joinToString("\n    ") { it.toString() }
+                    LaunchLog.w("WATCHDOG t+${sec}s main thread state=${mainThread.state}\n    $st")
+                }
+            } catch (_: Throwable) {}
+        }.apply { isDaemon = true; name = "xelo-watchdog" }.start()
     }
 
     override fun onResume() {
